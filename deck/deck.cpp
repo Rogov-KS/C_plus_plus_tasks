@@ -1,5 +1,10 @@
 #include <iostream>
 
+namespace Const{
+const int default_am_array = 3;
+const int part_all_deck = 3;
+const int kThree = 3;
+}
 template<bool is_const, typename T, typename D>
 struct Conditional {
   typedef D type;
@@ -22,19 +27,19 @@ void swap(Deque<T>& a, Deque<T>& b) noexcept {
 }
 
 template<typename T>
-std::ostream& operator<<(std::ostream& os, const Deque<T>& a);
+std::ostream& operator<<(std::ostream& os, const Deque<T>& a) noexcept;
 
 template<typename T>
 class Deque {
  public:
   Deque() {
-    arr_pointers_ = new T* [3];
-    am_arr_ = 3;
+    arr_pointers_ = new T* [Const::default_am_array]; // Exception safety
+    am_arr_ = Const::default_am_array;
     size_ = 0;
-    for (size_t i = 0; i < am_arr_; ++i) {
-      arr_pointers_[i] = reinterpret_cast<T*>(new uint8_t[sizeof(T) * size_of_arr_]);
-    }
-    begin_ = am_arr_ * size_of_arr_ / 3;
+
+    default_array();
+
+    begin_ = am_arr_ * size_of_arr_ / Const::default_am_array; // *3 / 3 ????
   }
 
   Deque(const Deque& other) : am_arr_(other.am_arr_), begin_(other.begin_), size_(other.size_) {
@@ -45,34 +50,47 @@ class Deque {
     for (iterator it = begin(); it < end(); ++it) {
       it->~T();
     }
-    for (size_t i = 0; i < am_arr_; ++i) {
-      delete[] reinterpret_cast<uint8_t*>(arr_pointers_[i]);
+    if(arr_pointers_) {
+      for (size_t i = 0; i < am_arr_; ++i) {
+        delete[] reinterpret_cast<uint8_t*>(arr_pointers_[i]);
+      }
+      delete[] arr_pointers_;
     }
-    delete[] arr_pointers_;
   }
 
-  explicit Deque(int x) {
-    am_arr_ = 3 * (x / size_of_arr_ + (x % size_of_arr_ != 0));
-    arr_pointers_ = new T* [am_arr_];
+  explicit Deque(int x) {  // Objects not constructed. Use next constructor here
+    am_arr_ = Const::part_all_deck * (x / size_of_arr_ + (x % size_of_arr_ != 0));
+    arr_pointers_ = new T* [am_arr_];  // safety
     size_ = x;
-    for (size_t i = 0; i < am_arr_; ++i) {
-      arr_pointers_[i] = reinterpret_cast<T*>(new uint8_t[sizeof(T) * size_of_arr_]);
-    }
-    begin_ = am_arr_ * size_of_arr_ / 3;
+
+    default_array();
+
+    begin_ = am_arr_ * size_of_arr_ / Const::part_all_deck;
   }
 
   Deque(size_t x, const T& copy) {
-    am_arr_ = 3 * (x / size_of_arr_ + ((x % size_of_arr_) != 0));
-    begin_ = am_arr_ * size_of_arr_ / 3;
-    arr_pointers_ = new T* [am_arr_];
+    am_arr_ = Const::part_all_deck * (x / size_of_arr_ + ((x % size_of_arr_) != 0));
+    begin_ = am_arr_ * size_of_arr_ / Const::part_all_deck;
+    arr_pointers_ = new T* [am_arr_]; // safety
     size_ = x;
     for (size_t i = 0; i < am_arr_; ++i) {
-      arr_pointers_[i] = reinterpret_cast<T*>(new uint8_t[sizeof(T) * size_of_arr_]);
+      try {
+        arr_pointers_[i] = reinterpret_cast<T*>(new uint8_t[sizeof(T) * size_of_arr_]);
+      } catch(...) {
+        free_arr_pointers_until_index(i);
+        throw;
+      }
     }
+
     size_t s = 0;
-    for (size_t i = am_arr_ / 3; i < 2 * am_arr_ / 3; ++i) {
+    for (size_t i = am_arr_ / Const::part_all_deck; i < (Const::part_all_deck - 1) * am_arr_ / Const::part_all_deck; ++i) {
       for (size_t j = 0; j < size_of_arr_; ++j) {
-        new(arr_pointers_[i] + j) T(copy); //execption
+        try {
+          new(arr_pointers_[i] + j) T(copy); //execption
+        } catch (...) {
+          free_arr_pointers();
+          throw;
+        }
         ++s;
         if (s == x) {
           break;
@@ -86,32 +104,42 @@ class Deque {
 
   Deque(const std::initializer_list<T>& list) {
     size_ = list.size();
-    am_arr_ = 3 * (size_ / size_of_arr_ + (size_ % size_of_arr_ != 0));
-    arr_pointers_ = new T* [am_arr_];
-    begin_ = am_arr_ * size_of_arr_ / 3;
+    am_arr_ = Const::part_all_deck * (size_ / size_of_arr_ + (size_ % size_of_arr_ != 0));
+    arr_pointers_ = new T* [am_arr_]; // safety
+    begin_ = am_arr_ * size_of_arr_ / Const::part_all_deck;
     size_t s = 0;
     for (size_t i = 0; i < am_arr_; ++i) {
-      arr_pointers_[i] = reinterpret_cast<T*>(new uint8_t[sizeof(T) * size_of_arr_]);
+      try {
+        arr_pointers_[i] = reinterpret_cast<T*>(new uint8_t[sizeof(T) * size_of_arr_]);
+      } catch (...) {
+        free_arr_pointers_until_index(i);
+      }
     }
     for (auto t : list) {
-      new(arr_pointers_[(begin_ + s) / size_of_arr_] + (s % size_of_arr_)) T(t);
+      try {
+        new(&arr_pointers_[s]) T(t);  // hard to read. Use []
+      } catch (...) {
+        free_arr_pointers();
+      }
       ++s;
     }
   }
 
   Deque& operator=(const Deque& D) {
-    begin_ = D.begin_;
-    size_ = D.size_;
-    am_arr_ = D.am_arr_;
-    CreatCopyArr(D.arr_pointers_);
+    Deque copy(D);
+    begin_ = copy.begin_;
+    size_ = copy.size_;
+    am_arr_ = copy.am_arr_;
+    arr_pointers_ = copy.arr_pointers_;
+    copy.arr_pointers_ = nullptr;
     return *this;
   }
 
-  size_t size() const {
+  size_t size() const noexcept {
     return size_;
   }
 
-  T& operator[](size_t i) {
+  T& operator[](size_t i) noexcept {
     return arr_pointers_[(begin_ + i) / size_of_arr_][(begin_ + i) % size_of_arr_];
   }
 
@@ -119,30 +147,27 @@ class Deque {
     if (i >= size_) {
       throw std::out_of_range("out_of_range");
     }
-    return arr_pointers_[(begin_ + i) / size_of_arr_][(begin_ + i) % size_of_arr_];
+    return (*this)[i]; // use []
   }
 
-  const T& operator[](size_t i) const {
-    return arr_pointers_[(begin_ + i) / size_of_arr_][(begin_ + i) % size_of_arr_];
+  const T& operator[](size_t i) const noexcept {
+    return (*this)[i];
   }
 
   const T& at(size_t i) const {
     if (i >= size_) {
       throw std::out_of_range("out_of_range");
     }
-    return arr_pointers_[(begin_ + i) / size_of_arr_][(begin_ + i) % size_of_arr_];
+    return (*this)[i]; //
   }
 
   void push_back(const T& t) {
     if (begin_ + size_ >= am_arr_ * size_of_arr_) {
-      relocate();  // exception but it is norm!!!
+      relocate();
     }
 
-    try {
-      (*this)[size_] = t; // exceptoin
-    } catch (...) {
-      throw;
-    }
+    (*this)[size_] = t;
+
     ++size_;
   }
 
@@ -155,14 +180,11 @@ class Deque {
 
   void push_front(const T& t) {
     if (begin_ == 0) {
-      relocate();  // exception but it is norm!!!
+      relocate();
     }
 
-    try {
-      (*this)[-1] = t;
-    } catch (...) {
-      throw;
-    }
+    (*this)[-1] = t;
+
     --begin_;
     ++size_;
   }
@@ -176,19 +198,19 @@ class Deque {
   }
 
   T front() {
-    return arr_pointers_[begin_ / size_of_arr_][begin_ % size_of_arr_];
+    return (*this)[0]; // []
   }
 
-  const T front() const {
-    return arr_pointers_[begin_ / size_of_arr_][begin_ % size_of_arr_];
+  const T& front() const {
+    return (*this)[0]; // []
   }
 
   T back() {
-    return arr_pointers_[(begin_ + size_) / size_of_arr_][(begin_ + size_) % size_of_arr_];
+    return (*this)[size_ - 1];  // []
   }
 
-  const T back() const {
-    return arr_pointers_[(begin_ + size_) / size_of_arr_][(begin_ + size_) % size_of_arr_];
+  const T& back() const {
+    return (*this)[size_ - 1]; // []
   }
 
   template<bool is_const>
@@ -260,7 +282,7 @@ class Deque {
         arr_ += (dif / size_of_arr_);
         elem_ = (*arr_ + dif % size_of_arr_);
       } else {
-        difference_type dif2 = size_of_arr_ - 1 - dif;
+        difference_type dif2 = static_cast<size_t>(size_of_arr_) - 1 - dif;
         arr_ -= dif2 / size_of_arr_;
         elem_ = *arr_ + (size_of_arr_ - 1 - (dif2 % size_of_arr_));
       }
@@ -341,32 +363,31 @@ class Deque {
   }
 
   const_iterator begin() const {
-    iterator it(&arr_pointers_[begin_ / size_of_arr_], &arr_pointers_[begin_ / size_of_arr_][begin_ % size_of_arr_]);
+    const_iterator it(&arr_pointers_[begin_ / size_of_arr_], &arr_pointers_[begin_ / size_of_arr_][begin_ % size_of_arr_]);
     return it;
   }
 
   const_iterator end() const {
-    iterator it(&arr_pointers_[(begin_ + size_) / size_of_arr_],
-                &arr_pointers_[(begin_ + size_) / size_of_arr_][(begin_ + size_) % size_of_arr_]);
+    const_iterator it(&arr_pointers_[(begin_ + size_) / size_of_arr_],
+                      &arr_pointers_[(begin_ + size_) / size_of_arr_][(begin_ + size_) % size_of_arr_]);
     return it;
   }
 
   const_iterator cbegin() {
-    iterator it(&arr_pointers_[begin_ / size_of_arr_], &arr_pointers_[begin_ / size_of_arr_][begin_ % size_of_arr_]);
+    iterator it = begin(); // begin + cast ?
     return it;
   }
 
   const_iterator cend() {
-    iterator it(&arr_pointers_[(begin_ + size_) / size_of_arr_],
-                &arr_pointers_[(begin_ + size_) % size_of_arr_][(begin_ + size_) % size_of_arr_]);
+    iterator it = end();
     return it;
   }
 
   template <bool is_const>
-  using ReverseIterator = std::reverse_iterator<common_iter<is_const>>;
+  using common_reverse_iterator = std::reverse_iterator<common_iter<is_const>>;
 
-  using reverse_iterator = ReverseIterator<false>;
-  using const_reverse_iterator = ReverseIterator<true>;
+  using reverse_iterator = common_reverse_iterator<false>;
+  using const_reverse_iterator = common_reverse_iterator<true>;
 
   reverse_iterator rbegin() {
     return (static_cast<reverse_iterator>(this->end()));
@@ -453,15 +474,24 @@ class Deque {
   uint64_t size_;
 
   void CreatCopyArr(T** arr_copy) {
-    arr_pointers_ = new T* [am_arr_];
+    arr_pointers_ = new T* [am_arr_]; // safety
     for (size_t i = 0; i < am_arr_; ++i) {
-      arr_pointers_[i] = reinterpret_cast<T*>(new uint8_t[size_of_arr_ * sizeof(T)]);
+      try{
+        arr_pointers_[i] = reinterpret_cast<T*>(new uint8_t[size_of_arr_ * sizeof(T)]);
+      } catch(...) {
+        free_arr_pointers_until_index(i);
+        throw;
+      }
     }
     size_t a, b;
     for (size_t i = 0; i < size_; ++i) {
       a = (begin_ + i) / size_of_arr_;
       b = (begin_ + i) % size_of_arr_;
-      new(arr_pointers_[a] + b) T(arr_copy[a][b]);
+      try {
+        new(arr_pointers_[a] + b) T(arr_copy[a][b]);
+      } catch(...) {
+        free_arr_pointers();
+      }
     }
   }
 
@@ -477,32 +507,63 @@ class Deque {
     delete[] arr_pointers_;
     am_arr_ = new_am_arr;
     arr_pointers_ = new_arr;
-    begin_ = begin_ % size_of_arr_ + new_am_arr * size_of_arr_ / 3;
+    begin_ = begin_ % size_of_arr_ + new_am_arr * size_of_arr_ / Const::part_all_deck;
   }
 
-  void relocate() {   // strong safety
+  void relocate() {   // No safety fix
     size_t beginer = begin_ / size_of_arr_;
     size_t ender = (begin_ + size_ - 1) / size_of_arr_;
-    size_t new_am_arr = 3 * (ender - beginer + 1);
+    size_t new_am_arr = Const::part_all_deck * (ender - beginer + 1);
     T** new_arr = new T* [new_am_arr];
     for (size_t i = 0; i < new_am_arr; ++i) {
-      if (i < new_am_arr / 3 || i >= 2 * new_am_arr / 3) {
+      if (i < new_am_arr / Const::part_all_deck || i >= (Const::part_all_deck - 1) * new_am_arr / Const::part_all_deck) {
         try {
           new_arr[i] = reinterpret_cast<T*>(new uint8_t[sizeof(T) * size_of_arr_]);
         } catch (...) {
           for (size_t j = 0; j < new_am_arr; ++j) {
-            if ((j < new_am_arr / 3 || j >= 2 * new_am_arr / 3) && j <= i) {
+            if ((j < new_am_arr / Const::part_all_deck || j >= (Const::part_all_deck - 1) * new_am_arr / Const::part_all_deck) && j <= i) {
               delete[] reinterpret_cast<uint8_t*>(new_arr[j]);
             }
-          }
-          delete[] new_arr;
+          } // Unreachable code fix
+          delete[] new_arr; // Free memory correctly
           throw;
         }
       } else {
-        new_arr[i] = arr_pointers_[i - new_am_arr / 3 + beginer];
+        new_arr[i] = arr_pointers_[i - new_am_arr / Const::part_all_deck + beginer];
       }
     }
     GetNewParaments(new_am_arr, new_arr);
+  }
+
+  void free_arr_pointers_until_index(size_t index) noexcept {
+    for(size_t j = 0; j < index; ++j) {
+      delete[] arr_pointers_[j];
+    }
+    delete[] arr_pointers_;
+  }
+
+  void free_arr_pointers() {
+    free_arr_pointers_until_index(am_arr_);
+  }
+
+  void default_array(const T& tmp = T()) {
+    for (size_t i = 0; i < am_arr_; ++i) {
+      try {
+        arr_pointers_[i] = reinterpret_cast<T*>(new uint8_t[sizeof(T) * size_of_arr_]);
+      } catch (...) {
+        free_arr_pointers_until_index(i);
+        throw;
+      }
+    }
+
+    for (size_t i = 0; i < am_arr_; ++i) {
+      try {
+        new(arr_pointers_ + i) T(tmp);
+      } catch (...) {
+        free_arr_pointers();
+        throw;
+      }
+    }
   }
 
   friend void swap <>(Deque<T>& a, Deque<T>& b) noexcept;
@@ -510,7 +571,7 @@ class Deque {
 
 
 template<typename T>
-std::ostream& operator<<(std::ostream& os, const Deque<T>& a) {
+std::ostream& operator<<(std::ostream& os, const Deque<T>& a) noexcept {
   for (auto v : a) {
     os << v << " ";
   }
