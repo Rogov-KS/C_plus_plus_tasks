@@ -87,8 +87,8 @@ class List {
   using node_alloc = std::allocator_traits<typename Alloc::template rebind<Node>::other>;
   using my_alloc_type = typename node_alloc::allocator_type;
   List(const my_alloc_type& alloc = my_alloc_type() ) : alloc_(alloc), fake_node_(new BaseNode){
-    fake_node_->prev = reinterpret_cast<Node*>(fake_node_);
-    fake_node_->next = reinterpret_cast<Node*>(fake_node_);
+    fake_node_->prev = fake_node_;
+    fake_node_->next = fake_node_;
   }
 
   List(size_t n, const my_alloc_type& alloc_out = my_alloc_type()) : List(alloc_out), total_size_(n){
