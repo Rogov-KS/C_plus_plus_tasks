@@ -5,28 +5,26 @@ template<size_t N>
 class StackStorage {
  public:
   StackStorage(const StackStorage& s) = delete;
-  StackStorage() { arr_ = new uint8_t[N]; }
+  StackStorage() : arr_(new uint8_t[N]), begin_(arr_), sz(N) {}
   ~StackStorage() { delete[] arr_; }
 
   void* allocate(size_t n, size_t allign) {
-    int start_begin = begin_;
-    if (begin_ % allign) {
-      begin_ += (allign - begin_ % allign);
-    }
-    if (begin_ + n >= N) {
-      begin_ = start_begin;
+    auto pointer = std::align(allign, n, begin_, sz);
+    begin_ = static_cast<char*>(begin_) + n;
+    sz -= n;
+    if (!pointer) {
       throw std::bad_alloc();
     }
 
-    begin_ += n;
-    return (arr_ + begin_ - n);
+    return pointer;
   }
 
-  void deallocate(const void*, size_t) {}
+  void deallocate(const void*, size_t) noexcept {}
 
  private:
   uint8_t* arr_;
-  uint64_t begin_ = 0;
+  void* begin_;
+  size_t sz;
 };
 
 template<typename T, size_t N>
@@ -48,14 +46,14 @@ class StackAllocator {
     return reinterpret_cast<T*>(storage_->allocate(n * sizeof(T), alignof(T)));
   }
 
-  void deallocate(T*, size_t) {}
+  void deallocate(T*, size_t) noexcept {}
 
   template<class U>
   struct rebind {
     typedef StackAllocator<U, N> other;
   };
 
-  StackStorage<N>* GetStorage() const {
+  StackStorage<N>* GetStorage() const noexcept {
     return storage_;
   }
 
@@ -86,86 +84,46 @@ class List {
   struct BaseNode;
   struct Node;
  public:
-  using alloc_traits = std::allocator_traits<typename Alloc::template rebind<Node>::other>;
-  using my_alloc_type = typename alloc_traits::allocator_type;
+  using node_alloc = std::allocator_traits<typename Alloc::template rebind<Node>::other>;
+  using my_alloc_type = typename node_alloc::allocator_type;
   List(const my_alloc_type& alloc = my_alloc_type() ) : alloc_(alloc), fake_node_(new BaseNode){
     fake_node_->prev = reinterpret_cast<Node*>(fake_node_);
     fake_node_->next = reinterpret_cast<Node*>(fake_node_);
   }
 
-  List(size_t n, const my_alloc_type& alloc_out = my_alloc_type()) : alloc_(alloc_out), fake_node_(new BaseNode) {
-    total_size_ = n;
-    fake_node_->prev = reinterpret_cast<Node*>(fake_node_);
-    fake_node_->next = reinterpret_cast<Node*>(fake_node_);
-    Node* next = reinterpret_cast<Node*>(fake_node_);
+  List(size_t n, const my_alloc_type& alloc_out = my_alloc_type()) : List(alloc_out), total_size_(n){
+    auto next = fake_node_;
     for (size_t i = 0; i < n; ++i) {
-      Node* cur;
-      try {
-        cur = alloc_traits::allocate(alloc_, 1);
-      } catch (...) {
-        clear();
-        delete fake_node_;
-        throw;
-      }
-      try {
-        alloc_traits::construct(alloc_, cur);
-      } catch (...) {
-        clear();
-        delete fake_node_;
-        throw;
-      }
-      //всьавляем начиная с головы и идя в хвост
-      InsertAftrerNode(next, cur);
-      next = cur;
+      copy_elem(T(), next, fake_node_);
     }
   }
 
-  List(size_t n, const T& t, my_alloc_type& alloc_out = my_alloc_type()) : alloc_(alloc_out), fake_node_(new BaseNode) {
-    total_size_ = n;
-    fake_node_->prev = reinterpret_cast<Node*>(fake_node_);
-    fake_node_->next = reinterpret_cast<Node*>(fake_node_);
-    Node* next = reinterpret_cast<Node*>(fake_node_);
+  List(size_t n, const T& t, my_alloc_type& alloc_out = my_alloc_type()) : List(alloc_), total_size_(n) {
+    auto next = fake_node_;
     for (size_t i = 0; i < n; ++i) {
-      Node* cur;
-      try {
-        cur = alloc_traits::allocate(alloc_, 1);
-      } catch (...) {
-        clear();
-        delete fake_node_;
-        throw;
-      }
-      try {
-        alloc_traits::construct(alloc_, cur, t);
-      } catch (...) {
-        clear();
-        delete fake_node_;
-        throw;
-      }
-      //всьавляем начиная с головы и идя в хвост
-      InsertAftrerNode(next, cur);
-      next = cur;
+      copy_elem(t, next, fake_node_);
     }
     fake_node_->next = next;
-    next->prev = reinterpret_cast<Node*>(fake_node_);
+    next->prev = fake_node_;
   }
 
-  ~List() {
+  ~List() noexcept {
     clear();
     delete fake_node_;
   }
 
-  T& front() { return fake_node_->next->val; }
-  const T& front() const { return fake_node_->next->val; }
-  T& back() { return fake_node_->prev->val; }
-  const T& back() const { return fake_node_->prev->val; }
+  T& front() noexcept { return fake_node_->next->val; }
+  const T& front() const noexcept { return fake_node_->next->val; }
+  T& back() noexcept { return fake_node_->prev->val; }
+  const T& back() const noexcept { return fake_node_->prev->val; }
 
   void push_back(const T& t) {
-    Node* new_node = alloc_traits::allocate(alloc_, 1);
+    Node* new_node = node_alloc::allocate(alloc_, 1);
     try {
-      alloc_traits::construct(alloc_, new_node, t);
+      node_alloc::construct(alloc_, new_node, t);
     }
     catch (...) {
-      alloc_traits::deallocate(alloc_, new_node, 1);
+      node_alloc::deallocate(alloc_, new_node, 1);
       throw;
     }
     InsertAftrerNode(fake_node_->next, new_node);
@@ -174,32 +132,26 @@ class List {
 
   template<typename... Args>
   void emplace_back(Args... args) {
-    Node* new_node = alloc_traits::allocate(alloc_, 1);
+    Node* new_node = node_alloc::allocate(alloc_, 1);
     try {
-      alloc_traits::construct(alloc_, new_node, args...);
+      node_alloc::construct(alloc_, new_node, args...);
     }
     catch (...) {
-      alloc_traits::deallocate(alloc_, new_node, 1);
+      node_alloc::deallocate(alloc_, new_node, 1);
       throw;
     }
     Node* last_node = fake_node_->prev;
-    if (last_node) {
-      InsertAftrerNode(last_node, new_node);
-    } else {
-      fake_node_->prev = new_node;
-      fake_node_->next = new_node;
-      new_node->prev = reinterpret_cast<Node*>(fake_node_);
-    }
+    InsertAftrerNode(last_node, new_node);
     ++total_size_;
   }
 
   void push_front(const T& t) {
-    Node* new_node = alloc_traits::allocate(alloc_, 1);
+    Node* new_node = node_alloc::allocate(alloc_, 1);
     try {
-      alloc_traits::construct(alloc_, new_node, t);
+      node_alloc::construct(alloc_, new_node, t);
     }
     catch (...) {
-      alloc_traits::deallocate(alloc_, new_node, 1);
+      node_alloc::deallocate(alloc_, new_node, 1);
       throw;
     }
     InsertBeforeNode(fake_node_->prev, new_node);
@@ -208,57 +160,54 @@ class List {
 
   template<typename... Args>
   void emplace_front(Args... args) {
-    Node* new_node = alloc_traits::allocate(alloc_, 1);
+    Node* new_node = node_alloc::allocate(alloc_, 1);
     try {
-      alloc_traits::construct(alloc_, new_node, args...);
+      node_alloc::construct(alloc_, new_node, args...);
     }
     catch (...) {
-      alloc_traits::deallocate(alloc_, new_node, 1);
+      node_alloc::deallocate(alloc_, new_node, 1);
       throw;
     }
-    Node* head_node = fake_node_->next;
-    if (head_node) {
-      InsertBeforeNode(head_node, new_node);
-    } else {
-      fake_node_->prev = new_node;
-      fake_node_->next = new_node;
-    }
+    InsertBeforeNode(fake_node_->next, new_node);
+
+
     ++total_size_;
   }
 
   void pop_back() {
     if (total_size_) {
-      Node* last_node = fake_node_->next;
+      BaseNode* last_node = fake_node_->next;
       EraseNode(last_node);
-      alloc_traits::destroy(alloc_, last_node);
-      alloc_traits::deallocate(alloc_, last_node, 1);
+      node_alloc::destroy(alloc_, static_cast<Node*>(last_node));
+      node_alloc::deallocate(alloc_, static_cast<Node*>(last_node), 1);
       --total_size_;
     }
   }
   void pop_front() {
     if (total_size_) {
-      Node* first_node = fake_node_->prev;
+      Node* first_node = static_cast<Node*>(fake_node_->prev);
       EraseNode(first_node);
-      alloc_traits::destroy(alloc_, first_node);
-      alloc_traits::deallocate(alloc_, first_node, 1);
+      node_alloc::destroy(alloc_, first_node);
+      node_alloc::deallocate(alloc_, first_node, 1);
       --total_size_;
     }
   }
 
-  void clear() {
-    for (Node* node = fake_node_->prev; node != fake_node_;) {
-      Node* prev = node->prev;
-      alloc_traits::destroy(alloc_, node);
-      alloc_traits::deallocate(alloc_, node, 1);
+  void clear() noexcept {
+    for (Node* node = static_cast<Node*>(fake_node_->prev); node != fake_node_;) {
+      auto prev = static_cast<Node*>(node->prev);
+      node_alloc::destroy(alloc_, node);
+      node_alloc::deallocate(alloc_, node, 1);
       node = prev;
     }
-    fake_node_->prev = reinterpret_cast<Node*>(fake_node_);
-    fake_node_->next = reinterpret_cast<Node*>(fake_node_);
+    fake_node_->prev = fake_node_;
+    fake_node_->next = fake_node_;
     total_size_ = 0;
   }
 
-  size_t size() const { return total_size_; }
-  bool empty() const { return total_size_ == 0; }
+
+  size_t size() const noexcept { return total_size_; }
+  bool empty() const noexcept { return total_size_ == 0; }
 
   template<bool is_const>
   struct common_iter;
@@ -354,11 +303,11 @@ class List {
   const_reverse_iterator crend() const { return std::make_reverse_iterator(cbegin()); }
 
   void insert(const const_iterator& pos, const T& t) {
-    Node* new_node = alloc_traits::allocate(alloc_, 1);
+    Node* new_node = node_alloc::allocate(alloc_, 1);
     try {
-      alloc_traits::construct(alloc_, new_node, t);
+      node_alloc::construct(alloc_, new_node, t);
     } catch (...) {
-      alloc_traits::deallocate(alloc_, new_node, 1);
+      node_alloc::deallocate(alloc_, new_node, 1);
       throw;
     }
     Node* cur = pos.GetNodePointer();
@@ -370,74 +319,30 @@ class List {
     if(total_size_) {
       Node* cur = pos.GetNodePointer();
       EraseNode(cur);
-      alloc_traits::destroy(alloc_, pos.GetNodePointer());
-      alloc_traits::deallocate(alloc_, cur, 1);
+      node_alloc::destroy(alloc_, pos.GetNodePointer());
+      node_alloc::deallocate(alloc_, cur, 1);
       --total_size_;
     }
   }
 
-  List(const List& lst): total_size_(lst.total_size_), alloc_(alloc_traits::select_on_container_copy_construction(lst.alloc_)), fake_node_(new BaseNode) {
-    fake_node_->prev = reinterpret_cast<Node*>(fake_node_);
-    fake_node_->next = reinterpret_cast<Node*>(fake_node_);
-    Node* next = reinterpret_cast<Node*>(fake_node_);
+  List(const List& lst): List(node_alloc::select_on_container_copy_construction(lst.alloc_)), total_size_(lst.total_size_) {
+    auto next = fake_node_;
     for(common_iter it = lst.begin(), _end = lst.end(); it != _end; ++it) {
-      Node* cur;
-      try {
-        cur = alloc_traits::allocate(alloc_, 1);
-      } catch (...) {
-        clear();
-        delete fake_node_;
-        throw;
-      }
-      try {
-        alloc_traits::construct(alloc_, cur, *it);
-      } catch (...) {
-        clear();
-        delete fake_node_;
-        throw;
-      }
-      InsertAftrerNode(next, cur);
-      next = cur;
+      copy_elem(*it, next, fake_node_);
     }
   }
 
   List& operator=(const List& lst){
-    if(alloc_traits::propagate_on_container_copy_assignment::value) {
+    if(node_alloc::propagate_on_container_copy_assignment::value) {
       alloc_ = lst.alloc_;
     }
 
-    BaseNode* new_fake_node = new BaseNode;
-    new_fake_node->prev = reinterpret_cast<Node*>(new_fake_node);
-    new_fake_node->next = reinterpret_cast<Node*>(new_fake_node);
-    Node* next = reinterpret_cast<Node*>(new_fake_node);
+    auto new_fake_node = new BaseNode;
+    new_fake_node->prev = new_fake_node;
+    new_fake_node->next = new_fake_node;
+    BaseNode* next = new_fake_node;
     for(common_iter it = lst.begin(), _end = lst.end(); it != _end; ++it) {
-      Node* cur;
-      try {
-        cur = alloc_traits::allocate(alloc_, 1);
-      } catch (...) {
-        for (Node* new_cur = new_fake_node->prev; new_cur != new_fake_node;) {
-          Node* prev = new_cur->prev;
-          alloc_traits::destroy(alloc_, new_cur);
-          alloc_traits::deallocate(alloc_, new_cur, 1);
-          new_cur = prev;
-        }
-        delete new_fake_node;
-        throw;
-      }
-      try {
-        alloc_traits::construct(alloc_, cur, *it);
-      } catch (...) {
-        for (Node* new_cur = new_fake_node->prev; new_cur != new_fake_node;) {
-          Node* prev = new_cur->prev;
-          alloc_traits::destroy(alloc_, new_cur);
-          alloc_traits::deallocate(alloc_, new_cur, 1);
-          new_cur = prev;
-        }
-        delete new_fake_node;
-        throw;
-      }
-      InsertAftrerNode(next, cur);
-      next = cur;
+      copy_elem(*it, next, new_fake_node);
     }
     clear();
     delete fake_node_;
@@ -447,7 +352,7 @@ class List {
   }
 
 
-  Alloc get_allocator() const { return alloc_; }
+  Alloc get_allocator() const noexcept { return alloc_; }
 
 
  private:
@@ -455,15 +360,16 @@ class List {
     struct BaseNode {
     BaseNode() = default;
     ~BaseNode() = default;
-    BaseNode(Node* const next, Node* const prev) : next(next), prev(prev) {}
-    Node* next = nullptr;
-    Node* prev = nullptr;
+    BaseNode(BaseNode* const next, BaseNode* const prev) : next(next), prev(prev) {}
+    BaseNode* next = nullptr;
+    BaseNode* prev = nullptr;
   };
 
   struct Node : BaseNode {
     Node() = default;
     ~Node() = default;
-    Node(Node* const next, Node* const prev, const T& t) : BaseNode(next, prev), val(t) {}
+    Node(BaseNode* const next, BaseNode* const prev, const T& t) : BaseNode(next, prev), val(t) {}
+    T Val() const noexcept { return val; }
     explicit Node(const T& t) : val(t) {}
     template<typename... Args>
     Node(Args... args): val(args...) {}
@@ -471,38 +377,80 @@ class List {
   };
 
   size_t total_size_ = 0;
-  typename alloc_traits::allocator_type alloc_;
+  typename node_alloc::allocator_type alloc_;
   BaseNode* fake_node_;
 
 
-  static void InsertNodeBetweenTwo(Node* head, Node* tail, Node* cur) {
+  static void InsertNodeBetweenTwo(BaseNode* head, BaseNode* tail, BaseNode* cur) {
     cur->prev = tail;
     cur->next = head;
     tail->next = cur;
     head->prev = cur;
   }
 
-  static void InsertAftrerNode(Node* node, Node* cur) {
-    Node* prev = node->prev;
+  static void InsertAftrerNode(BaseNode* node, BaseNode* cur) {
+    BaseNode* prev = node->prev;
     prev->next = cur;
     cur->prev = prev;
     node->prev = cur;
     cur->next = node;
   }
 
-  static void InsertBeforeNode(Node* node, Node* cur) {
-    Node* next = node->next;    // order is essential
+  static void InsertBeforeNode(BaseNode* node, BaseNode* cur) {
+    BaseNode* next = node->next;    // order is essential
     next->prev = cur;
     cur->next = next;
     node->next = cur;
     cur->prev = node;
   }
 
-  static void EraseNode(Node* node) {
-    Node* prev = node->prev;
-    Node* next = node->next;
+  static void EraseNode(BaseNode* node) {
+    BaseNode* prev = node->prev;
+    BaseNode* next = node->next;
     prev->next = next;
     next->prev = prev;
+  }
+
+  void clear_fake(BaseNode* fake_node) {
+    for (Node* node = static_cast<Node*>(fake_node->prev); node != fake_node;) {
+      auto prev = static_cast<Node*>(node->prev);
+      node_alloc::destroy(alloc_, node);
+      node_alloc::deallocate(alloc_, static_cast<Node*>(node), 1);
+      node = prev;
+    }
+  }
+
+  void copy_elem(const T& tmp, BaseNode* next, BaseNode* fake_node) {
+    Node* cur;
+    try {
+      cur = node_alloc::allocate(alloc_, 1);
+    } catch (...) {
+      for (Node* new_cur = fake_node->prev; new_cur != fake_node;) {
+        Node* prev = new_cur->prev;
+        node_alloc::destroy(alloc_, new_cur);
+        node_alloc::deallocate(alloc_, new_cur, 1);
+        new_cur = prev;
+      }
+      delete fake_node;
+      delete cur;
+      throw;
+    }
+    try {
+      node_alloc::construct(alloc_, cur, tmp);
+    } catch (...) {
+      for (Node* new_cur = fake_node->prev; new_cur != fake_node;) {
+        Node* prev = new_cur->prev;
+        node_alloc::destroy(alloc_, new_cur);
+        node_alloc::deallocate(alloc_, new_cur, 1);
+        new_cur = prev;
+      }
+      node_alloc::destroy(alloc_, cur);
+      node_alloc::deallocate(alloc_, cur);
+      delete fake_node;
+      throw;
+    }
+    InsertAftrerNode(next, cur);
+    next = cur;
   }
 };
 
