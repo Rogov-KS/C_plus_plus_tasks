@@ -88,7 +88,11 @@ class List {
   using my_alloc_type = typename node_alloc::allocator_type;
   List(const my_alloc_type& alloc = my_alloc_type() ) : alloc_(alloc) {
     fake_node_ = node_alloc::allocate(alloc_, 1);
-    node_alloc::construct(alloc_, fake_node_);
+    try {
+      node_alloc::construct(alloc_, fake_node_);
+    } catch(...) {
+      node_alloc::deallocate(alloc_, fake_node_, 1);
+    }
     fake_node_->prev = fake_node_;
     fake_node_->next = fake_node_;
   }
@@ -460,3 +464,4 @@ std::ostream& operator<<(std::ostream& os, const List<T>& lst) {
   os << "\n";
   return os;
 }
+
