@@ -86,7 +86,9 @@ class List {
  public:
   using node_alloc = std::allocator_traits<typename Alloc::template rebind<Node>::other>;
   using my_alloc_type = typename node_alloc::allocator_type;
-  List(const my_alloc_type& alloc = my_alloc_type() ) : alloc_(alloc), fake_node_(new BaseNode){
+  List(const my_alloc_type& alloc = my_alloc_type() ) : alloc_(alloc) {
+    fake_node_ = node_alloc::allocate(alloc_, 1);
+    node_alloc::construct(alloc_, fake_node_);
     fake_node_->prev = fake_node_;
     fake_node_->next = fake_node_;
   }
@@ -109,7 +111,7 @@ class List {
 
   ~List() noexcept {
     clear();
-    delete fake_node_;
+    del_fake_node();
   }
 
   T& front() noexcept { return fake_node_->next->val; }
@@ -345,7 +347,7 @@ class List {
       copy_elem(*it, next, new_fake_node);
     }
     clear();
-    delete fake_node_;
+    del_fake_node();
     fake_node_ = new_fake_node;
     total_size_ = lst.total_size_;
     return *this;
@@ -381,14 +383,14 @@ class List {
   BaseNode* fake_node_;
 
 
-  static void InsertNodeBetweenTwo(BaseNode* head, BaseNode* tail, BaseNode* cur) {
+  static void InsertNodeBetweenTwo(BaseNode* head, BaseNode* tail, BaseNode* cur) noexcept {
     cur->prev = tail;
     cur->next = head;
     tail->next = cur;
     head->prev = cur;
   }
 
-  static void InsertAftrerNode(BaseNode* node, BaseNode* cur) {
+  static void InsertAftrerNode(BaseNode* node, BaseNode* cur) noexcept {
     BaseNode* prev = node->prev;
     prev->next = cur;
     cur->prev = prev;
@@ -396,7 +398,7 @@ class List {
     cur->next = node;
   }
 
-  static void InsertBeforeNode(BaseNode* node, BaseNode* cur) {
+  static void InsertBeforeNode(BaseNode* node, BaseNode* cur) noexcept {
     BaseNode* next = node->next;    // order is essential
     next->prev = cur;
     cur->next = next;
@@ -404,7 +406,7 @@ class List {
     cur->prev = node;
   }
 
-  static void EraseNode(BaseNode* node) {
+  static void EraseNode(BaseNode* node) noexcept {
     BaseNode* prev = node->prev;
     BaseNode* next = node->next;
     prev->next = next;
@@ -425,32 +427,28 @@ class List {
     try {
       cur = node_alloc::allocate(alloc_, 1);
     } catch (...) {
-      for (Node* new_cur = fake_node->prev; new_cur != fake_node;) {
-        Node* prev = new_cur->prev;
-        node_alloc::destroy(alloc_, new_cur);
-        node_alloc::deallocate(alloc_, new_cur, 1);
-        new_cur = prev;
-      }
-      delete fake_node;
-      delete cur;
+      clear_fake(fake_node);
+      del_fake_node();
+      node_alloc::destroy(alloc_, cur);
       throw;
     }
+
     try {
       node_alloc::construct(alloc_, cur, tmp);
     } catch (...) {
-      for (Node* new_cur = fake_node->prev; new_cur != fake_node;) {
-        Node* prev = new_cur->prev;
-        node_alloc::destroy(alloc_, new_cur);
-        node_alloc::deallocate(alloc_, new_cur, 1);
-        new_cur = prev;
-      }
+      clear_fake(fake_node);
       node_alloc::destroy(alloc_, cur);
       node_alloc::deallocate(alloc_, cur);
-      delete fake_node;
+      del_fake_node();
       throw;
     }
     InsertAftrerNode(next, cur);
     next = cur;
+  }
+
+  void del_fake_node() noexcept {
+    node_alloc::destroy(alloc_, fake_node_);
+    node_alloc::deallocate(alloc_, fake_node_, 1);
   }
 };
 
@@ -462,4 +460,3 @@ std::ostream& operator<<(std::ostream& os, const List<T>& lst) {
   os << "\n";
   return os;
 }
-
