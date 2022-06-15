@@ -36,10 +36,9 @@ class Deque {
     arr_pointers_ = new T* [Const::default_am_array]; // Exception safety
     am_arr_ = Const::default_am_array;
     size_ = 0;
+    begin_ = am_arr_ * size_of_arr_ / Const::part_all_deck; // *3 / 3 ????
 
     default_array();
-
-    begin_ = am_arr_ * size_of_arr_ / Const::default_am_array; // *3 / 3 ????
   }
 
   Deque(const Deque& other) : am_arr_(other.am_arr_), begin_(other.begin_), size_(other.size_) {
@@ -47,10 +46,10 @@ class Deque {
   }
 
   ~Deque() {
-    for (iterator it = begin(); it < end(); ++it) {
-      it->~T();
-    }
     if(arr_pointers_) {
+      for (iterator it = begin(); it < end(); ++it) {
+        it->~T();
+      }
       for (size_t i = 0; i < am_arr_; ++i) {
         delete[] reinterpret_cast<uint8_t*>(arr_pointers_[i]);
       }
@@ -62,10 +61,9 @@ class Deque {
     am_arr_ = Const::part_all_deck * (x / size_of_arr_ + (x % size_of_arr_ != 0));
     arr_pointers_ = new T* [am_arr_];  // safety
     size_ = x;
+    begin_ = am_arr_ * size_of_arr_ / Const::part_all_deck;
 
     default_array();
-
-    begin_ = am_arr_ * size_of_arr_ / Const::part_all_deck;
   }
 
   Deque(size_t x, const T& copy) {
@@ -73,33 +71,7 @@ class Deque {
     begin_ = am_arr_ * size_of_arr_ / Const::part_all_deck;
     arr_pointers_ = new T* [am_arr_]; // safety
     size_ = x;
-    for (size_t i = 0; i < am_arr_; ++i) {
-      try {
-        arr_pointers_[i] = reinterpret_cast<T*>(new uint8_t[sizeof(T) * size_of_arr_]);
-      } catch(...) {
-        free_arr_pointers_until_index(i);
-        throw;
-      }
-    }
-
-    size_t s = 0;
-    for (size_t i = am_arr_ / Const::part_all_deck; i < (Const::part_all_deck - 1) * am_arr_ / Const::part_all_deck; ++i) {
-      for (size_t j = 0; j < size_of_arr_; ++j) {
-        try {
-          new(arr_pointers_[i] + j) T(copy); //execption
-        } catch (...) {
-          free_arr_pointers();
-          throw;
-        }
-        ++s;
-        if (s == x) {
-          break;
-        }
-      }
-      if (s == x) {
-        break;
-      }
-    }
+    default_array(copy);
   }
 
   Deque(const std::initializer_list<T>& list) {
@@ -119,6 +91,7 @@ class Deque {
       try {
         new(&arr_pointers_[s]) T(t);  // hard to read. Use []
       } catch (...) {
+        del_deck_elems_until_index(s);
         free_arr_pointers();
       }
       ++s;
@@ -127,11 +100,7 @@ class Deque {
 
   Deque& operator=(const Deque& D) {
     Deque copy(D);
-    begin_ = copy.begin_;
-    size_ = copy.size_;
-    am_arr_ = copy.am_arr_;
-    arr_pointers_ = copy.arr_pointers_;
-    copy.arr_pointers_ = nullptr;
+    swap(*this, copy);
     return *this;
   }
 
@@ -373,15 +342,9 @@ class Deque {
     return it;
   }
 
-  const_iterator cbegin() {
-    iterator it = begin(); // begin + cast ?
-    return it;
-  }
+  const_iterator cbegin() { return begin(); }
 
-  const_iterator cend() {
-    iterator it = end();
-    return it;
-  }
+  const_iterator cend() { return end(); }
 
   template <bool is_const>
   using common_reverse_iterator = std::reverse_iterator<common_iter<is_const>>;
@@ -414,12 +377,7 @@ class Deque {
   }
 
   void insert(iterator pos, const T& t) {                  // ?????
-    Deque copy;
-    try {
-      copy = *this;
-    } catch (...) {
-      throw;
-    }
+    Deque copy(*this);
 
     try {
       if (copy.size_ + copy.begin_ == copy.am_arr_ * size_of_arr_) {
@@ -490,6 +448,7 @@ class Deque {
       try {
         new(arr_pointers_[a] + b) T(arr_copy[a][b]);
       } catch(...) {
+        del_deck_elems_until_index(i);
         free_arr_pointers();
       }
     }
@@ -546,6 +505,18 @@ class Deque {
     free_arr_pointers_until_index(am_arr_);
   }
 
+  void del_deck_elems_until_index(size_t ind) noexcept {
+    iterator it = begin();
+    for (size_t i = 0; i < ind; ++i) {
+      it->~T();
+      ++it;
+    }
+  }
+
+  void del_deck_elems() noexcept {
+    del_deck_elems_until_index(size_);
+  }
+
   void default_array(const T& tmp = T()) {
     for (size_t i = 0; i < am_arr_; ++i) {
       try {
@@ -556,10 +527,11 @@ class Deque {
       }
     }
 
-    for (size_t i = 0; i < am_arr_; ++i) {
+    for (size_t i = 0; i < size_; ++i) {
       try {
-        new(arr_pointers_ + i) T(tmp);
+        new(&((*this)[i])) T(tmp);
       } catch (...) {
+        del_deck_elems_until_index(i);
         free_arr_pointers();
         throw;
       }
