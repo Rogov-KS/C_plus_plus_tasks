@@ -92,6 +92,7 @@ class List {
       node_alloc::construct(alloc_, fake_node_);
     } catch(...) {
       node_alloc::deallocate(alloc_, fake_node_, 1);
+      throw;
     }
     fake_node_->prev = fake_node_;
     fake_node_->next = fake_node_;
@@ -464,4 +465,3 @@ std::ostream& operator<<(std::ostream& os, const List<T>& lst) {
   os << "\n";
   return os;
 }
-
